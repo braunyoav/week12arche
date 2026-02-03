@@ -1,16 +1,30 @@
 #include <windows.h>
-#include <cstdlib>
 #include <iostream>
 
+static long long CountChar(const char* buf, size_t n, char c)
+{
+    long long cnt = 0;
+    for (size_t i = 0; i < n; i++)
+    {
+        if (buf[i] == c)
+        {
+            cnt++;
+        }
+    }
+        return cnt;
+}
 
 int main()
 {
+    const char* fileName = "gibrish.bin";
+    const char letter = 'A';
 
-    HANDLE hFile;
+    SYSTEM_INFO si{};
+    GetSystemInfo(&si);
+    const DWORD chunkSize = si.dwAllocationGranularity;
 
-    hFile = CreateFileA
-    (
-        "gibrish.bin",
+    HANDLE hFile = CreateFileA(
+        fileName,
         GENERIC_READ,
         FILE_SHARE_READ,
         NULL,
@@ -18,55 +32,74 @@ int main()
         FILE_ATTRIBUTE_NORMAL,
         NULL
     );
-
-    if (hFile == INVALID_HANDLE_VALUE)
+    if (hFile == INVALID_HANDLE_VALUE) 
     {
+        std::cerr << "CreateFileA failed: " << GetLastError() << "\n";
         return 1;
     }
-    LARGE_INTEGER fileSize;
-    if (!GetFileSizeEx(hFile, &fileSize))
+
+    LARGE_INTEGER sz{};
+    if (!GetFileSizeEx(hFile, &sz) || sz.QuadPart <= 0)
     {
+        std::cerr << "GetFileSizeEx failed or empty file\n";
         CloseHandle(hFile);
         return 1;
     }
-    DWORD dwFileSize = fileSize.LowPart;
-    if (dwFileSize == 0)
-    {
-        std::cout << "Error in size";
-        return 1;
-    }
-    char* ptr = (char*)malloc(dwFileSize);
-    if (ptr == NULL)
-    {
-        return 1;
-    }
-    DWORD dwBytesRead = 0;
-    BOOL bSuccess = ReadFile(
-        hFile,                
-        ptr,        
-        dwFileSize,            
-        &dwBytesRead,           
+    const unsigned long long fileSize = (unsigned long long)sz.QuadPart;
+
+    HANDLE hMap = CreateFileMappingA(
+        hFile,
+        NULL,
+        PAGE_READONLY,
+        0, 0,
         NULL
     );
-
-    if (!bSuccess || dwBytesRead != dwFileSize)
+    if (!hMap)
     {
-        std::cerr << "Error reading file: " << GetLastError() << std::endl;
+        std::cerr << "CreateFileMappingA failed: " << GetLastError() << "\n";
         CloseHandle(hFile);
         return 1;
     }
-    long int counter = 0;
-    for (long int i = 0; i < dwFileSize; i++)
+
+    long long total = 0;
+
+    for (unsigned long long offset = 0; offset < fileSize; offset += chunkSize)
     {
-        if (*(ptr + i) == 'A')
+        DWORD bytesToMap = chunkSize;
+        unsigned long long remaining = fileSize - offset;
+        if (remaining < bytesToMap)
         {
-            counter++;
+            bytesToMap = (DWORD)remaining;
         }
+
+        DWORD offsetLow = (DWORD)(offset & 0xFFFFFFFFULL);
+        DWORD offsetHigh = (DWORD)(offset >> 32);
+
+        const char* view = (const char*)MapViewOfFile(
+            hMap,
+            FILE_MAP_READ,
+            offsetHigh,
+            offsetLow,
+            bytesToMap
+        );
+
+        if (!view) 
+        {
+            std::cerr << "MapViewOfFile failed at offset " << offset
+                << " err=" << GetLastError() << "\n";
+            CloseHandle(hMap);
+            CloseHandle(hFile);
+            return 1;
+        }
+
+        total += CountChar(view, bytesToMap, letter);
+
+        UnmapViewOfFile(view);
     }
-    std::cout << "the number of A's is: " << counter << std::endl;
-    free(ptr);
+
+    std::cout << "the number of A's is: " << total << "\n";
+
+    CloseHandle(hMap);
     CloseHandle(hFile);
-    system("pause");
-    getchar();
     return 0;
 }
